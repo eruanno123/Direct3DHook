@@ -1,5 +1,5 @@
 ﻿
-namespace TestScreenshot.Helpers
+namespace HellbladeSaver.Helpers
 {
     using System.IO;
 

@@ -1,5 +1,5 @@
 ﻿
-namespace TestScreenshot.Logger
+namespace HellbladeSaver.Logger
 {
     using System;
     using System.Collections.Generic;

@@ -1,13 +1,13 @@
 ﻿
-namespace TestScreenshot
+namespace HellbladeSaver
 {
     using System;
     using System.Collections.Generic;
     using System.IO;
     using System.Threading;
     using System.Linq;
-    using TestScreenshot.Logger;
-    using TestScreenshot.Helpers;
+    using HellbladeSaver.Logger;
+    using HellbladeSaver.Helpers;
     using Capture.Hook;
     using System.Diagnostics;
     using Capture;
@@ -16,73 +16,10 @@ namespace TestScreenshot
 
     public sealed class HellbladeGameSaveTracker : IDisposable
     {
-        private HellbladeTrackingConfig _config;
-        private FileSystemWatcher _fileWatcher;
-
-        private List<HSaveItem> _saveList = new List<HSaveItem>();
-
-        private bool _shouldExit;
-
         public HellbladeGameSaveTracker (HellbladeTrackingConfig config)
         {
             _config = config;
             Initialize();
-        }
-
-        private void Initialize ()
-        {
-            _fileWatcher = new FileSystemWatcher()
-            {
-                Path = _config.SaveGamePath,
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime,
-                Filter = _config.SaveGameFilter
-            };
-
-            _fileWatcher.Changed += _fileWatcher_Changed;
-            _fileWatcher.EnableRaisingEvents = true;
-
-            Directory.CreateDirectory(_config.SaveBackupPath);
-        }
-
-        private void _fileWatcher_Changed (object sender, FileSystemEventArgs e)
-        {
-            SimpleLogger.Default.Info("File Event = {0}, Name = {1}", e.ChangeType.ToString(), e.Name);
-
-            if (File.Exists(e.FullPath))
-            {
-                var hash = MD5Helper.GetMD5String(e.FullPath);
-
-                if (!_saveList.Exists(hs => hash == hs.Checksum))
-                {
-                    int nCount = _saveList.Count;
-                    string locName = string.Format(_config.DefaultNameFormat, nCount);
-                    string backupPath = PathHelper.AddBackslash(_config.SaveBackupPath) + locName + ".sav";
-                    while (File.Exists(backupPath))
-                    {
-                        nCount++;
-                        locName = string.Format(_config.DefaultNameFormat, nCount);
-                        backupPath = PathHelper.AddBackslash(_config.SaveBackupPath) + locName + ".sav";
-                    }
-
-                    string imgPath = PathHelper.AddBackslash(_config.SaveBackupPath) + locName + ".jpg";
-
-                    HSaveItem hSaveItem = new HSaveItem()
-                    {
-                        SaveFilePath = backupPath,
-                        ScreenCaptureFilePath = imgPath,
-                        CaptureTime = DateTime.Now,
-                        Checksum = hash,
-                        LocationName = locName
-                    };
-                    _saveList.Add(hSaveItem);
-
-                
-                    File.Copy(e.FullPath, backupPath);
-                    GrabScreenCapture()?.Save(imgPath);
-
-                    SimpleLogger.Default.Info("New save location: {0}", hSaveItem);
-                }
-            }
         }
 
         public void Dispose ()
@@ -112,9 +49,82 @@ namespace TestScreenshot
             }
         }
 
-        private bool _isAttached;
+        /***************** PRIVATE METHODS ********************/
 
-        private Thread _workerThread;
+        private void Initialize ()
+        {
+            _fileWatcher = new FileSystemWatcher()
+            {
+                Path = _config.SaveGamePath,
+                NotifyFilter = NotifyFilters.LastWrite,
+                Filter = _config.SaveGameFilter
+            };
+
+            _fileWatcher.Changed += _fileWatcher_Changed;
+            _fileWatcher.EnableRaisingEvents = true;
+
+            Directory.CreateDirectory(_config.SaveBackupPath);
+        }
+
+        private string GenerateLocationName(string contentHash)
+        {
+            string locName = string.Empty;
+
+            do
+            {
+                locName = string.Format(_config.DefaultNameFormat, DateTime.Now, _saveCounter, contentHash.Substring(0, 6));
+                _saveCounter++;
+            } while (File.Exists(locName + ".sav"));
+
+            return locName;
+        }
+
+        private void _fileWatcher_Changed (object sender, FileSystemEventArgs e)
+        {
+            SimpleLogger.Default.Trace($"File Event = {e.ChangeType}, Name = {e.Name}, Path = {e.FullPath}");
+            Thread.Sleep(100);
+
+            try
+            {
+                PerformSavegameBackup(e.FullPath);
+            }
+            catch (Exception ex)
+            {
+                SimpleLogger.Default.Error("Problem with saving backup: " + ex.Message);
+            }
+        }
+
+        private void PerformSavegameBackup (string trackedSavFile)
+        {
+            if (File.Exists(trackedSavFile))
+            {
+                var hash = MD5Helper.GetMD5String(trackedSavFile);
+
+                if (!_saveList.Exists(hs => hash == hs.Checksum))
+                {
+                    string locName = GenerateLocationName(hash);
+                    string backupBasePath = PathHelper.AddBackslash(_config.SaveBackupPath) + locName;
+                    string backupPath = backupBasePath + ".sav";
+                    string screenCapturePath = backupBasePath + ".jpg";
+
+                    HellbladeSaveItem hSaveItem = new HellbladeSaveItem()
+                    {
+                        SaveFilePath = backupPath,
+                        ScreenCaptureFilePath = screenCapturePath,
+                        CaptureTime = DateTime.Now,
+                        Checksum = hash,
+                        LocationName = locName
+                    };
+                    _saveList.Add(hSaveItem);
+
+                    File.Copy(trackedSavFile, backupPath);
+                    GrabScreenCapture()?.Save(screenCapturePath, System.Drawing.Imaging.ImageFormat.Jpeg);
+
+                    SimpleLogger.Default.Info("New save location: {0}", hSaveItem);
+                }
+            }
+        }
+
         private void WorkerThread ()
         {
             while (!_shouldExit)
@@ -125,9 +135,13 @@ namespace TestScreenshot
                     {
                         AttachProcess();
                     }
+                    catch (InvalidOperationException e)
+                    {
+                        SimpleLogger.Default.Trace("Cannot attach to game process (yet): {0}", e.Message);
+                    }
                     catch (Exception e)
                     {
-                        SimpleLogger.Default.Warning("Cannot attach to game process: {0}", e.Message);
+                        SimpleLogger.Default.Fatal("Failed to attach to game process: {0}", e.Message);
                     }
                 }
 
@@ -155,9 +169,6 @@ namespace TestScreenshot
             _isAttached = false;
         }
 
-        int processId = 0;
-        Process _process;
-        CaptureProcess _captureProcess;
         private void AttachProcess ()
         {
             string exeName = Path.GetFileNameWithoutExtension(_config.HellbladeExecutablePath);
@@ -185,7 +196,6 @@ namespace TestScreenshot
                     ShowOverlay = false
                 };
 
-                processId = process.Id;
                 _process = process;
 
                 var captureInterface = new CaptureInterface();
@@ -218,7 +228,7 @@ namespace TestScreenshot
         /// </summary>
         /// <param name="clientPID"></param>
         /// <param name="message"></param>
-        void ScreenshotManager_OnScreenshotDebugMessage (int clientPID, string message)
+        private void ScreenshotManager_OnScreenshotDebugMessage (int clientPID, string message)
         {
             SimpleLogger.Default.Trace("{0}:{1}", clientPID, message);
         }
@@ -226,11 +236,12 @@ namespace TestScreenshot
         /// <summary>
         /// Create the screen shot request
         /// </summary>
-        Bitmap GrabScreenCapture()
+        private Bitmap GrabScreenCapture()
         {
             if (_isAttached)
             {
-                var screenshot = _captureProcess.CaptureInterface.GetScreenshot();
+                var screenshot = _captureProcess.CaptureInterface.GetScreenshot(
+                    Rectangle.Empty, TimeSpan.FromSeconds(2), _config.TargetImageSize, ImageFormat.Bitmap);
 
                 if ((screenshot != null) && (screenshot.Data != null))
                 {
@@ -240,5 +251,17 @@ namespace TestScreenshot
 
             return null;
         }
+
+        #region Private stuff
+        private HellbladeTrackingConfig _config;
+        private FileSystemWatcher _fileWatcher;
+        private List<HellbladeSaveItem> _saveList = new List<HellbladeSaveItem>();
+        private int _saveCounter;
+        private bool _shouldExit;
+        private bool _isAttached;
+        private Thread _workerThread;
+        private Process _process;
+        private CaptureProcess _captureProcess;
+        #endregion
     }
 }

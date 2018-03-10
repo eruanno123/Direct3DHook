@@ -1,5 +1,5 @@
 ﻿
-namespace TestScreenshot
+namespace HellbladeSaver
 {
     using System.IO;
     using System.Security.Cryptography;

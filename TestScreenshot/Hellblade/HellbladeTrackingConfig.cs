@@ -1,5 +1,7 @@
 ﻿
-namespace TestScreenshot
+using System.Drawing;
+
+namespace HellbladeSaver
 {
     public class HellbladeTrackingConfig
     {
@@ -10,6 +12,6 @@ namespace TestScreenshot
         public string DefaultNameFormat { get; set; }
 
         public string HellbladeExecutablePath { get; set; }
-
+        public Size? TargetImageSize { get; internal set; }
     }
 }

@@ -1,5 +1,5 @@
 ﻿
-namespace TestScreenshot.Logger
+namespace HellbladeSaver.Logger
 {
     public enum LogLevel
     {
